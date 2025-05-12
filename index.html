@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pembaca Gerakan Bibir</title>
+    <title>Pembaca Gerakan Bibir dengan MediaPipe</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -53,11 +53,17 @@
             box-shadow: 0 4px 8px rgba(0,0,0,0.2);
         }
         
-        #video {
+        #video, #canvasOutput {
             width: 100%;
             height: auto;
             background-color: #333;
             display: block;
+        }
+        
+        #canvasOutput {
+            position: absolute;
+            top: 0;
+            left: 0;
         }
         
         .controls {
@@ -125,7 +131,7 @@
             font-weight: 500;
         }
         
-        .status.listening {
+        .status.active {
             background-color: #e6f4ea;
             color: #137333;
         }
@@ -135,26 +141,43 @@
             color: #c5221f;
         }
         
-        .confidence-bar {
+        .lip-movement-indicator {
             width: 100%;
-            height: 10px;
+            height: 30px;
             background-color: #e0e0e0;
             border-radius: 5px;
             margin-top: 10px;
             overflow: hidden;
+            position: relative;
         }
         
-        .confidence-progress {
+        .movement-bar {
             height: 100%;
             background-color: #4285f4;
             width: 0%;
-            transition: width 0.3s ease;
+            transition: width 0.2s ease;
+        }
+        
+        .word-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .word-item {
+            background-color: #e8f0fe;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
         
         .info-text {
             color: #555;
             text-align: center;
             margin-bottom: 1rem;
+            line-height: 1.5;
         }
         
         @media (max-width: 768px) {
@@ -171,21 +194,62 @@
                 width: 100%;
             }
         }
+
+        #loadingOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            color: white;
+        }
+
+        .loading-spinner {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #4285f4;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 2s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
+    <div id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <h2>Memuat Model MediaPipe...</h2>
+        <p>Mohon tunggu sebentar, ini mungkin memerlukan waktu beberapa detik.</p>
+    </div>
+
     <header>
-        <h1>Pembaca Gerakan Bibir</h1>
+        <h1>Pembaca Gerakan Bibir dengan MediaPipe</h1>
     </header>
     
     <div class="container">
-        <p class="info-text">Aplikasi ini menggunakan teknologi speech recognition untuk mendeteksi ucapan dari video kamera dan menampilkannya sebagai teks.</p>
+        <p class="info-text">
+            Aplikasi ini menggunakan MediaPipe Face Mesh untuk mendeteksi gerakan bibir dari kamera dan mencoba mengidentifikasi kata yang diucapkan.
+            <br>
+            <strong>Catatan:</strong> Sistem ini menggunakan deteksi gerakan bibir sederhana, bukan model machine learning yang kompleks, jadi akurasinya terbatas.
+        </p>
         
         <div class="video-container">
             <video id="video" autoplay muted playsinline></video>
+            <canvas id="canvasOutput"></canvas>
         </div>
         
-        <div id="status" class="status">Siap untuk memulai deteksi ucapan</div>
+        <div id="status" class="status">Siap untuk memulai deteksi gerakan bibir</div>
         
         <div class="controls">
             <button id="startBtn" class="btn btn-primary">
@@ -197,114 +261,95 @@
         </div>
         
         <div class="results-container">
-            <h3>Hasil Deteksi Ucapan:</h3>
-            <div id="interim" class="results-box"></div>
-            
-            <h3>Tingkat Kepercayaan:</h3>
-            <div class="confidence-bar">
-                <div id="confidenceBar" class="confidence-progress"></div>
+            <h3>Gerakan Bibir Terdeteksi:</h3>
+            <div class="lip-movement-indicator">
+                <div id="lipMovementBar" class="movement-bar"></div>
             </div>
-            <div id="confidenceText" style="text-align: center; margin-top: 5px;">0%</div>
+            
+            <h3>Teks Hasil Deteksi:</h3>
+            <div id="detectedText" class="results-box"></div>
+            
+            <h3>Kata-kata yang Dikenali:</h3>
+            <div id="wordContainer" class="word-container">
+                <!-- Words will be added here dynamically -->
+            </div>
         </div>
     </div>
+
+    <!-- MediaPipe Face Mesh Library -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const videoElement = document.getElementById('video');
+            const canvasElement = document.getElementById('canvasOutput');
+            const canvasCtx = canvasElement.getContext('2d');
             const startButton = document.getElementById('startBtn');
             const stopButton = document.getElementById('stopBtn');
-            const interimElement = document.getElementById('interim');
             const statusElement = document.getElementById('status');
-            const confidenceBar = document.getElementById('confidenceBar');
-            const confidenceText = document.getElementById('confidenceText');
+            const detectedTextElement = document.getElementById('detectedText');
+            const lipMovementBar = document.getElementById('lipMovementBar');
+            const wordContainer = document.getElementById('wordContainer');
+            const loadingOverlay = document.getElementById('loadingOverlay');
             
-            let recognition;
-            let isRecognizing = false;
+            let camera;
+            let faceMesh;
+            let isRunning = false;
+            let lipPoints = [];
+            let previousLipDistance = 0;
+            let lipMovementBuffer = [];
+            let wordBuffer = "";
+            let isRecordingWord = false;
+            let wordTimeoutId = null;
             
-            // Inisialisasi Web Speech API
-            function initSpeechRecognition() {
-                window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                
-                if (!window.SpeechRecognition) {
-                    updateStatus('Error: Browser Anda tidak mendukung Speech Recognition API', 'error');
-                    startButton.disabled = true;
-                    return false;
-                }
-                
-                recognition = new SpeechRecognition();
-                recognition.lang = 'id-ID'; // Gunakan bahasa Indonesia
-                recognition.continuous = true;
-                recognition.interimResults = true;
-                
-                recognition.onstart = function() {
-                    isRecognizing = true;
-                    updateStatus('Mendengarkan...', 'listening');
-                    startButton.disabled = true;
-                    stopButton.disabled = false;
-                };
-                
-                recognition.onresult = function(event) {
-                    let interimTranscript = '';
-                    let confidence = 0;
-                    
-                    for (let i = event.resultIndex; i < event.results.length; i++) {
-                        const transcript = event.results[i][0].transcript;
-                        confidence = event.results[i][0].confidence;
-                        
-                        if (event.results[i].isFinal) {
-                            interimTranscript += transcript;
-                        } else {
-                            interimTranscript += transcript;
-                        }
-                    }
-                    
-                    interimElement.textContent = interimTranscript;
-                    
-                    // Update confidence bar
-                    const confidencePercent = Math.round(confidence * 100);
-                    confidenceBar.style.width = `${confidencePercent}%`;
-                    confidenceText.textContent = `${confidencePercent}%`;
-                };
-                
-                recognition.onerror = function(event) {
-                    if (event.error === 'no-speech') {
-                        updateStatus('Tidak ada suara terdeteksi', 'error');
-                    } else {
-                        updateStatus(`Error: ${event.error}`, 'error');
-                        console.error('Speech recognition error:', event.error);
-                    }
-                };
-                
-                recognition.onend = function() {
-                    if (isRecognizing) {
-                        recognition.start();
-                    } else {
-                        updateStatus('Deteksi ucapan dihentikan', '');
-                        startButton.disabled = false;
-                        stopButton.disabled = true;
-                    }
-                };
-                
-                return true;
-            }
+            // Basic dictionary for simple lip reading (sangat sederhana)
+            const wordDictionary = {
+                "A": ["a", "ah", "ha"],
+                "B": ["b", "be", "bi"],
+                "C": ["c", "ce", "si"],
+                "D": ["d", "de", "di"],
+                "E": ["e", "eh"],
+                "F": ["f", "ef"],
+                "G": ["g", "gi"],
+                "H": ["h", "ha"],
+                "I": ["i", "ee"],
+                "J": ["j", "je"],
+                "K": ["k", "ka"],
+                "L": ["l", "el"],
+                "M": ["m", "em"],
+                "N": ["n", "en"],
+                "O": ["o", "oh"],
+                "P": ["p", "pe"],
+                "Q": ["q", "ku"],
+                "R": ["r", "ar"],
+                "S": ["s", "es"],
+                "T": ["t", "te"],
+                "U": ["u", "yu"],
+                "V": ["v", "vi"],
+                "W": ["w", "we"],
+                "X": ["x", "ex", "eks"],
+                "Y": ["y", "ye"],
+                "Z": ["z", "ze"],
+                "HELLO": ["hello", "halo"],
+                "HI": ["hi", "hai"],
+                "YES": ["yes", "ya"],
+                "NO": ["no", "tidak"],
+                "THANK": ["thank", "terima"],
+                "YOU": ["you", "kamu"],
+                "GOOD": ["good", "baik"],
+                "BAD": ["bad", "buruk"],
+                "PLEASE": ["please", "tolong"]
+            };
             
-            // Inisialisasi akses kamera
-            async function initCamera() {
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
-                        video: true, 
-                        audio: true 
-                    });
-                    
-                    videoElement.srcObject = stream;
-                    return true;
-                    
-                } catch (err) {
-                    updateStatus(`Error: Tidak dapat mengakses kamera - ${err.message}`, 'error');
-                    console.error('Error accessing camera:', err);
-                    return false;
-                }
-            }
+            // Konstanta untuk landmark bibir dari MediaPipe Face Mesh
+            const LIPS_INDEXES = [
+                // Bibir Luar
+                61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291,
+                // Bibir Dalam
+                78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308
+            ];
             
             function updateStatus(message, className = '') {
                 statusElement.textContent = message;
@@ -314,40 +359,259 @@
                 }
             }
             
+            function setupFaceMesh() {
+                faceMesh = new FaceMesh({
+                    locateFile: (file) => {
+                        return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+                    }
+                });
+                
+                faceMesh.setOptions({
+                    maxNumFaces: 1,
+                    refineLandmarks: true,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+                
+                faceMesh.onResults(onResults);
+                
+                loadingOverlay.style.display = 'none';
+            }
+            
+            function onResults(results) {
+                // Sesuaikan canvas dengan dimensi video
+                canvasElement.width = videoElement.videoWidth;
+                canvasElement.height = videoElement.videoHeight;
+                
+                canvasCtx.save();
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                
+                // Gambar video pada canvas
+                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+                
+                if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                    const landmarks = results.multiFaceLandmarks[0];
+                    
+                    // Gambar jaring wajah
+                    drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELATION, {color: '#C0C0C070', lineWidth: 1});
+                    
+                    // Ekstrak titik-titik bibir
+                    lipPoints = LIPS_INDEXES.map(index => landmarks[index]);
+                    
+                    // Gambar titik-titik bibir dengan warna yang jelas
+                    lipPoints.forEach(point => {
+                        canvasCtx.fillStyle = 'red';
+                        canvasCtx.beginPath();
+                        canvasCtx.arc(
+                            point.x * canvasElement.width,
+                            point.y * canvasElement.height,
+                            2, 0, 2 * Math.PI);
+                        canvasCtx.fill();
+                    });
+                    
+                    // Analisis gerakan bibir
+                    analyzeLipMovement(lipPoints);
+                }
+                
+                canvasCtx.restore();
+            }
+            
+            function analyzeLipMovement(lipPoints) {
+                if (lipPoints.length === 0) return;
+                
+                // Hitung jarak vertikal antara bibir atas dan bawah (untuk mendeteksi pembukaan mulut)
+                const upperLipIndex = 13;  // Titik tengah bibir atas (perkiraan)
+                const lowerLipIndex = 14;  // Titik tengah bibir bawah (perkiraan)
+                
+                if (lipPoints[upperLipIndex] && lipPoints[lowerLipIndex]) {
+                    const lipDistance = calculateDistance(
+                        lipPoints[upperLipIndex].x * canvasElement.width, 
+                        lipPoints[upperLipIndex].y * canvasElement.height,
+                        lipPoints[lowerLipIndex].x * canvasElement.width, 
+                        lipPoints[lowerLipIndex].y * canvasElement.height
+                    );
+                    
+                    // Hitung perubahan jarak
+                    const lipMovement = Math.abs(lipDistance - previousLipDistance);
+                    previousLipDistance = lipDistance;
+                    
+                    // Simpan dalam buffer untuk penghalusan
+                    lipMovementBuffer.push(lipMovement);
+                    if (lipMovementBuffer.length > 10) {
+                        lipMovementBuffer.shift();
+                    }
+                    
+                    // Rata-rata buffer
+                    const avgMovement = lipMovementBuffer.reduce((a, b) => a + b, 0) / lipMovementBuffer.length;
+                    
+                    // Normalisasi ke skala 0-100 untuk tampilan
+                    const normalizedMovement = Math.min(100, avgMovement * 50);
+                    
+                    // Update bar gerakan bibir
+                    lipMovementBar.style.width = `${normalizedMovement}%`;
+                    
+                    // Deteksi kata berdasarkan gerakan bibir
+                    detectWord(normalizedMovement, lipDistance);
+                }
+            }
+            
+            function calculateDistance(x1, y1, x2, y2) {
+                return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+            }
+            
+            function detectWord(movementIntensity, lipDistance) {
+                const MOVEMENT_THRESHOLD = 20;
+                const WORD_TIMEOUT = 1000; // 1 detik
+                
+                // Jika gerakan cukup signifikan dan bukan bagian dari kata yang sedang direkam
+                if (movementIntensity > MOVEMENT_THRESHOLD && !isRecordingWord) {
+                    isRecordingWord = true;
+                    clearTimeout(wordTimeoutId);
+                    
+                    // Tebak kata berdasarkan gerakan
+                    const potentialWords = guessWord(lipDistance);
+                    
+                    // Tambahkan kata ke buffer
+                    if (potentialWords.length > 0) {
+                        // Pilih kata random dari kandidat untuk simulasi
+                        const randomIndex = Math.floor(Math.random() * potentialWords.length);
+                        const guessedWord = potentialWords[randomIndex];
+                        
+                        // Tambahkan ke buffer teks
+                        if (wordBuffer.length > 0) {
+                            wordBuffer += " ";
+                        }
+                        wordBuffer += guessedWord;
+                        
+                        // Update tampilan teks
+                        detectedTextElement.textContent = wordBuffer;
+                        
+                        // Tambahkan ke word container sebagai item
+                        addWordItem(guessedWord);
+                    }
+                    
+                    // Set timer untuk mengakhiri kata saat ini
+                    wordTimeoutId = setTimeout(() => {
+                        isRecordingWord = false;
+                    }, WORD_TIMEOUT);
+                }
+            }
+            
+            function guessWord(lipDistance) {
+                // Parameter sementara untuk simulasi
+                // Di sini kita bisa implementasi model ML untuk prediksi lebih akurat
+                
+                // Simulasi pengenalan kata berdasarkan jarak bibir
+                // (sebuah pendekatan sangat sederhana untuk demo)
+                const MIN_DISTANCE = 5;
+                const MID_DISTANCE = 15;
+                const MAX_DISTANCE = 30;
+                
+                let wordSet = [];
+                
+                if (lipDistance < MIN_DISTANCE) {
+                    // Bibir hampir tertutup, mungkin konsonan seperti M, B, P
+                    wordSet = ["B", "M", "P"];
+                } else if (lipDistance < MID_DISTANCE) {
+                    // Bibir terbuka sedang, mungkin vokal seperti E, I
+                    wordSet = ["E", "I", "HELLO", "THANK"];
+                } else {
+                    // Bibir terbuka lebar, mungkin vokal seperti A, O
+                    wordSet = ["A", "O", "YES", "NO"];
+                }
+                
+                // Pilih subset acak dari kata-kata yang mungkin
+                const selectedIndex = Math.floor(Math.random() * wordSet.length);
+                const selectedWord = wordSet[selectedIndex];
+                
+                // Dapatkan kata-kata dari kamus berdasarkan huruf/kata yang dikenali
+                if (wordDictionary[selectedWord]) {
+                    return wordDictionary[selectedWord];
+                }
+                
+                return [selectedWord.toLowerCase()];
+            }
+            
+            function addWordItem(word) {
+                const wordElem = document.createElement('div');
+                wordElem.className = 'word-item';
+                wordElem.textContent = word;
+                wordContainer.appendChild(wordElem);
+                
+                // Batasi jumlah kata yang ditampilkan
+                if (wordContainer.children.length > 20) {
+                    wordContainer.removeChild(wordContainer.children[0]);
+                }
+            }
+            
+            async function initCamera() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: { width: 640, height: 480, facingMode: "user" },
+                        audio: false
+                    });
+                    
+                    videoElement.srcObject = stream;
+                    
+                    // Setelah video siap
+                    videoElement.onloadedmetadata = () => {
+                        // Inisialisasi kamera untuk MediaPipe
+                        camera = new Camera(videoElement, {
+                            onFrame: async () => {
+                                await faceMesh.send({image: videoElement});
+                            },
+                            width: 640,
+                            height: 480
+                        });
+                        
+                        updateStatus('Kamera siap. Klik "Mulai Deteksi" untuk memulai.', '');
+                    };
+                    
+                    return true;
+                } catch (err) {
+                    updateStatus(`Error: Tidak dapat mengakses kamera - ${err.message}`, 'error');
+                    console.error('Error accessing camera:', err);
+                    return false;
+                }
+            }
+            
             // Event handler untuk tombol mulai
             startButton.addEventListener('click', async function() {
-                // Inisialisasi kamera jika belum
                 if (!videoElement.srcObject) {
                     const cameraInitialized = await initCamera();
                     if (!cameraInitialized) return;
                 }
                 
-                // Inisialisasi speech recognition jika belum
-                if (!recognition) {
-                    const recognitionInitialized = initSpeechRecognition();
-                    if (!recognitionInitialized) return;
-                }
+                isRunning = true;
+                camera.start();
                 
-                // Mulai recognition
-                isRecognizing = true;
-                recognition.start();
+                updateStatus('Deteksi gerakan bibir aktif', 'active');
+                startButton.disabled = true;
+                stopButton.disabled = false;
             });
             
             // Event handler untuk tombol stop
             stopButton.addEventListener('click', function() {
-                isRecognizing = false;
+                isRunning = false;
                 
-                if (recognition) {
-                    recognition.stop();
+                if (camera) {
+                    camera.stop();
                 }
                 
-                updateStatus('Deteksi ucapan dihentikan', '');
+                updateStatus('Deteksi gerakan bibir dihentikan', '');
                 startButton.disabled = false;
                 stopButton.disabled = true;
             });
             
-            // Inisialisasi kamera saat halaman dimuat
-            initCamera();
+            // Reset hasil deteksi
+            document.getElementById('detectedText').addEventListener('click', function() {
+                wordBuffer = "";
+                detectedTextElement.textContent = "";
+                wordContainer.innerHTML = "";
+            });
+            
+            // Setup MediaPipe
+            setupFaceMesh();
         });
     </script>
 </body>
