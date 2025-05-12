@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pembaca Gerakan Bibir</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f2f5;
+            min-height: 100vh;
+        }
+        
+        header {
+            background-color: #4285f4;
+            color: white;
+            width: 100%;
+            text-align: center;
+            padding: 1rem 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            margin: 0;
+            font-size: 1.8rem;
+        }
+        
+        .container {
+            width: 90%;
+            max-width: 1000px;
+            margin: 2rem auto;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin-bottom: 1.5rem;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        
+        #video {
+            width: 100%;
+            height: auto;
+            background-color: #333;
+            display: block;
+        }
+        
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            width: 100%;
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+        
+        .btn-primary {
+            background-color: #4285f4;
+            color: white;
+        }
+        
+        .btn-danger {
+            background-color: #ea4335;
+            color: white;
+        }
+        
+        .btn:hover {
+            opacity: 0.9;
+            transform: translateY(-2px);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .results-container {
+            width: 100%;
+            margin-top: 1rem;
+        }
+        
+        .results-box {
+            width: 100%;
+            min-height: 150px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 1rem;
+            font-size: 1.2rem;
+            background-color: #f9f9f9;
+            margin-bottom: 1rem;
+        }
+        
+        .status {
+            margin-bottom: 1rem;
+            padding: 0.5rem;
+            border-radius: 4px;
+            text-align: center;
+            font-weight: 500;
+        }
+        
+        .status.listening {
+            background-color: #e6f4ea;
+            color: #137333;
+        }
+        
+        .status.error {
+            background-color: #fce8e6;
+            color: #c5221f;
+        }
+        
+        .confidence-bar {
+            width: 100%;
+            height: 10px;
+            background-color: #e0e0e0;
+            border-radius: 5px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+        
+        .confidence-progress {
+            height: 100%;
+            background-color: #4285f4;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .info-text {
+            color: #555;
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+            
+            .controls {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+            
+            .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Pembaca Gerakan Bibir</h1>
+    </header>
+    
+    <div class="container">
+        <p class="info-text">Aplikasi ini menggunakan teknologi speech recognition untuk mendeteksi ucapan dari video kamera dan menampilkannya sebagai teks.</p>
+        
+        <div class="video-container">
+            <video id="video" autoplay muted playsinline></video>
+        </div>
+        
+        <div id="status" class="status">Siap untuk memulai deteksi ucapan</div>
+        
+        <div class="controls">
+            <button id="startBtn" class="btn btn-primary">
+                <span>Mulai Deteksi</span>
+            </button>
+            <button id="stopBtn" class="btn btn-danger" disabled>
+                <span>Hentikan Deteksi</span>
+            </button>
+        </div>
+        
+        <div class="results-container">
+            <h3>Hasil Deteksi Ucapan:</h3>
+            <div id="interim" class="results-box"></div>
+            
+            <h3>Tingkat Kepercayaan:</h3>
+            <div class="confidence-bar">
+                <div id="confidenceBar" class="confidence-progress"></div>
+            </div>
+            <div id="confidenceText" style="text-align: center; margin-top: 5px;">0%</div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const videoElement = document.getElementById('video');
+            const startButton = document.getElementById('startBtn');
+            const stopButton = document.getElementById('stopBtn');
+            const interimElement = document.getElementById('interim');
+            const statusElement = document.getElementById('status');
+            const confidenceBar = document.getElementById('confidenceBar');
+            const confidenceText = document.getElementById('confidenceText');
+            
+            let recognition;
+            let isRecognizing = false;
+            
+            // Inisialisasi Web Speech API
+            function initSpeechRecognition() {
+                window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                
+                if (!window.SpeechRecognition) {
+                    updateStatus('Error: Browser Anda tidak mendukung Speech Recognition API', 'error');
+                    startButton.disabled = true;
+                    return false;
+                }
+                
+                recognition = new SpeechRecognition();
+                recognition.lang = 'id-ID'; // Gunakan bahasa Indonesia
+                recognition.continuous = true;
+                recognition.interimResults = true;
+                
+                recognition.onstart = function() {
+                    isRecognizing = true;
+                    updateStatus('Mendengarkan...', 'listening');
+                    startButton.disabled = true;
+                    stopButton.disabled = false;
+                };
+                
+                recognition.onresult = function(event) {
+                    let interimTranscript = '';
+                    let confidence = 0;
+                    
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        const transcript = event.results[i][0].transcript;
+                        confidence = event.results[i][0].confidence;
+                        
+                        if (event.results[i].isFinal) {
+                            interimTranscript += transcript;
+                        } else {
+                            interimTranscript += transcript;
+                        }
+                    }
+                    
+                    interimElement.textContent = interimTranscript;
+                    
+                    // Update confidence bar
+                    const confidencePercent = Math.round(confidence * 100);
+                    confidenceBar.style.width = `${confidencePercent}%`;
+                    confidenceText.textContent = `${confidencePercent}%`;
+                };
+                
+                recognition.onerror = function(event) {
+                    if (event.error === 'no-speech') {
+                        updateStatus('Tidak ada suara terdeteksi', 'error');
+                    } else {
+                        updateStatus(`Error: ${event.error}`, 'error');
+                        console.error('Speech recognition error:', event.error);
+                    }
+                };
+                
+                recognition.onend = function() {
+                    if (isRecognizing) {
+                        recognition.start();
+                    } else {
+                        updateStatus('Deteksi ucapan dihentikan', '');
+                        startButton.disabled = false;
+                        stopButton.disabled = true;
+                    }
+                };
+                
+                return true;
+            }
+            
+            // Inisialisasi akses kamera
+            async function initCamera() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: true, 
+                        audio: true 
+                    });
+                    
+                    videoElement.srcObject = stream;
+                    return true;
+                    
+                } catch (err) {
+                    updateStatus(`Error: Tidak dapat mengakses kamera - ${err.message}`, 'error');
+                    console.error('Error accessing camera:', err);
+                    return false;
+                }
+            }
+            
+            function updateStatus(message, className = '') {
+                statusElement.textContent = message;
+                statusElement.className = 'status';
+                if (className) {
+                    statusElement.classList.add(className);
+                }
+            }
+            
+            // Event handler untuk tombol mulai
+            startButton.addEventListener('click', async function() {
+                // Inisialisasi kamera jika belum
+                if (!videoElement.srcObject) {
+                    const cameraInitialized = await initCamera();
+                    if (!cameraInitialized) return;
+                }
+                
+                // Inisialisasi speech recognition jika belum
+                if (!recognition) {
+                    const recognitionInitialized = initSpeechRecognition();
+                    if (!recognitionInitialized) return;
+                }
+                
+                // Mulai recognition
+                isRecognizing = true;
+                recognition.start();
+            });
+            
+            // Event handler untuk tombol stop
+            stopButton.addEventListener('click', function() {
+                isRecognizing = false;
+                
+                if (recognition) {
+                    recognition.stop();
+                }
+                
+                updateStatus('Deteksi ucapan dihentikan', '');
+                startButton.disabled = false;
+                stopButton.disabled = true;
+            });
+            
+            // Inisialisasi kamera saat halaman dimuat
+            initCamera();
+        });
+    </script>
+</body>
+</html>
